@@ -8,6 +8,7 @@ It erases the DOS and NT Headers to make it look less suspicious in memory.
 ### Features
 - Uses direct syscall ([TartarusGate](https://github.com/trickster0/TartarusGate) by [trickster0](https://twitter.com/trickster012)) 
 - Erases the DOS and NT header
+- only the .text section is going to be RX
 
 ### TODO
 - Add Hooks
@@ -15,8 +16,10 @@ It erases the DOS and NT Headers to make it look less suspicious in memory.
 - x86 support
 - Add cna file for Cobalt Strike User Defined Reflective DLL Loader
 
+![Preview](https://pbs.twimg.com/media/FHe1LP-X0AoPxav?format=png&name=medium)
+
 ### Credits:
 - [@NinjaParanoid](https://twitter.com/NinjaParanoid): [PE Reflection: The King is Dead, Long Live the King](https://bruteratel.com/research/feature-update/2021/06/01/PE-Reflection-Long-Live-The-King/)
 - [@0xBoku](https://twitter.com/0xBoku): [User Defined Cobalt Strike Loader](https://github.com/boku7/CobaltStrikeReflectiveLoader)
 - [@ilove2pwn_](https://twitter.com/ilove2pwn_): [TitanLdr](https://github.com/SecIdiot/TitanLdr)
-- [trickster0](https://twitter.com/trickster012) [TartarusGate](https://github.com/trickster0/TartarusGate/) direct syscall methode
+- [trickster0](https://twitter.com/trickster012) [TartarusGate](https://github.com/trickster0/TartarusGate/) direct syscall method
