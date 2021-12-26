@@ -1,13 +1,13 @@
 
 # KaynLdr
 ### About
-Kayn Loader is a Reflective Loader written in C / ASM.
+KaynLdr is a Reflective Loader written in C / ASM.
 It uses direct syscalls to allocate virtual memory as RW and changes it to RX. 
 It erases the DOS and NT Headers to make it look less suspicious in memory.
 
 ### Features
 - Uses direct syscall ([TartarusGate](https://github.com/trickster0/TartarusGate) by [trickster0](https://twitter.com/trickster012)) 
-- Erases the DOS header/PE header and NT header
+- Erases the DOS and NT header
 
 ### TODO
 - Add Hooks
