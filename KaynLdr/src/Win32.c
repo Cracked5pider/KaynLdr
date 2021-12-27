@@ -34,9 +34,7 @@ FARPROC KGetProcAddressByHash( HMODULE DllModuleBase, DWORD FunctionHash, DWORD 
     PDWORD                  AddressOfFunctions      = NULL;
     PDWORD                  AddressOfNames          = NULL;
     PWORD                   AddressOfNameOrdinals   = NULL;
-#ifdef DEBUG
-    printf("[*] FunctionHash => %x\n", FunctionHash);
-#endif
+
     ModuleNtHeader          = RVA_2_VA(PIMAGE_NT_HEADERS, DllModuleBase, ((PIMAGE_DOS_HEADER) DllModuleBase)->e_lfanew);
     ModuleExportedDirectory = RVA_2_VA(PIMAGE_EXPORT_DIRECTORY, DllModuleBase, ModuleNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
 
@@ -44,13 +42,13 @@ FARPROC KGetProcAddressByHash( HMODULE DllModuleBase, DWORD FunctionHash, DWORD 
     AddressOfFunctions      = RVA_2_VA(PDWORD, DllModuleBase, ModuleExportedDirectory->AddressOfFunctions);
     AddressOfNameOrdinals   = RVA_2_VA(PWORD,  DllModuleBase, ModuleExportedDirectory->AddressOfNameOrdinals);
 
-    /*if ( (Ordinal != 0) && (((DWORD_PTR)Ordinal >> 16) == 0) )
+    if ( (Ordinal != 0) && (((DWORD_PTR)Ordinal >> 16) == 0) )
     {
         WORD  ordinal = Ordinal & 0xFFFF;
         if (ordinal < ModuleExportedDirectory->Base || ordinal >= ModuleExportedDirectory->Base + ModuleExportedDirectory->NumberOfFunctions)
             return NULL;
         return RVA_2_VA( FARPROC, DllModuleBase, AddressOfFunctions[AddressOfNameOrdinals[ordinal - ModuleExportedDirectory->Base]] );
-    }*/
+    }
 
     for (DWORD i = 0; i < ModuleExportedDirectory->NumberOfNames; i++)
     {
@@ -58,31 +56,8 @@ FARPROC KGetProcAddressByHash( HMODULE DllModuleBase, DWORD FunctionHash, DWORD 
             return RVA_2_VA( FARPROC, DllModuleBase, AddressOfFunctions[AddressOfNameOrdinals[i]] );
     }
 
-#ifdef DEBUG
-    printf("[-] !! Couldn't find windows api: %x !!\n", FunctionHash);
-#endif
-
     return NULL;
 }
-
-#ifdef DEBUG
-int My_MessageBoxA (
-    HWND   hWnd,
-    LPCSTR lpText,
-    LPCSTR lpCaption,
-    UINT   uType
-)
-{
-    puts("Hooked");
-
-    FARPROC msgbox = KGetProcAddressByHash( GetModuleHandleA("user32"), 0xb303ebb4 ,0 );
-
-    typedef int(*msgbox_t)(HWND,LPCSTR,LPCSTR,UINT);
-
-    (msgbox_t)msgbox( NULL, "Gotcha", "Hooked", MB_OK );
-    (msgbox_t)msgbox( hWnd, lpText, lpCaption, uType );
-}
-#endif
 
 VOID KResolveIAT( LPVOID KaynImage, LPVOID IatDir )
 {
@@ -196,32 +171,18 @@ DWORD KHashString( PVOID String, SIZE_T Length )
     return Hash;
 }
 
-INT KMemCompare( PVOID s1, PVOID s2, INT len)
-{
-    PUCHAR p = s1;
-    PUCHAR q = s2;
-    INT charCompareStatus = 0;
-
-    if (s1 == s2)
-        return charCompareStatus;
-
-    while (len > 0)
-    {
-        if (*p != *q)
-        {
-            charCompareStatus = (*p >*q) ? 1:-1;
-            break;
-        }
-        len--;
-        p++;
-        q++;
-    }
-    return charCompareStatus;
-}
-
 SIZE_T KStringLengthA( LPCSTR String )
 {
     LPCSTR String2 = String;
     for (String2 = String; *String2; ++String2);
     return (String2 - String);
+}
+
+VOID KMemSet(PVOID Destination, INT Value, SIZE_T Size)
+{
+    PBYTE D = (PBYTE)Destination;
+
+    while (Size--) *D++ = Value;
+
+    return;
 }

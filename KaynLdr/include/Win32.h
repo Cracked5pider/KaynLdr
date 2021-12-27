@@ -44,8 +44,7 @@ typedef struct {
 
 DWORD   KHashString( LPVOID String, SIZE_T Size );
 SIZE_T  KStringLengthA( LPCSTR String );
-
-INT     KMemCompare( PVOID s1, PVOID s2, INT len );
+VOID    KMemSet( PVOID Destination, INT Value, SIZE_T Size );
 
 HMODULE KGetModuleByHash( DWORD hash );
 FARPROC KGetProcAddressByHash( HMODULE DllModuleBase, DWORD FunctionHash, DWORD Ordinal );

