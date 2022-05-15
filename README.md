@@ -2,19 +2,18 @@
 # KaynLdr
 ### About
 KaynLdr is a Reflective Loader written in C / ASM.
-It uses direct syscalls to allocate virtual memory as RW and changes it to RX. 
-It erases the DOS and NT Headers to make it look less suspicious in memory.
 
 ### Features
-- Uses direct syscall ([TartarusGate](https://github.com/trickster0/TartarusGate) by [trickster0](https://twitter.com/trickster012)) 
 - Erases the DOS and NT header
-- only the .text section is going to be RX
+- Library/Api used:
+  - ntdll.dll 
+    - LdrLoadDll
+    - NtAllocateVirtualMemory
+    - NtProtectVirtualMemory
 
 ### TODO
 - Add Hooks
-- Rewrite most functions in assembly
 - x86 support
-- Add cna file for Cobalt Strike User Defined Reflective DLL Loader
 
 ![Preview](https://pbs.twimg.com/media/FHe1LP-X0AoPxav?format=png&name=medium)
 

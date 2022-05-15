@@ -1,7 +1,6 @@
 /**
  * KaynLdr
  * Author: Paul Ungur (@C5pider)
- * Credits: Austin Hudson (@ilove2pwn_), Chetan Nayak (@NinjaParanoid), Bobby Cooke (@0xBoku), @trickster012
  */
 
 #include <KaynLdr.h>
@@ -9,20 +8,31 @@
 
 HINSTANCE hAppInstance = NULL;
 
-BOOL WINAPI DllMain( HINSTANCE hinstDLL, DWORD dwReason, LPVOID lpReserved )
+BOOL WINAPI DllMain( HINSTANCE hInstDLL, DWORD dwReason, LPVOID lpReserved )
 {
     BOOL bReturnValue = TRUE;
+
     switch( dwReason )
     {
         case DLL_QUERY_HMODULE:
             if( lpReserved != NULL )
-                *(HMODULE *)lpReserved = hAppInstance;
+                *( HMODULE* ) lpReserved = hAppInstance;
             break;
+
         case DLL_PROCESS_ATTACH:
         {
-            hAppInstance = hinstDLL;
-            MessageBoxA( NULL, "Hello from KaynLdr", "KaynLdr", MB_OK );
-            break;
+            hAppInstance     = hInstDLL;
+
+            PCHAR HelloMsg   = "Hello from KaynLdr";
+            PCHAR Buffer     = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, strlen( HelloMsg ) + 1 );
+
+            memcpy( Buffer, HelloMsg, strlen( HelloMsg ) + 1 );
+
+            MessageBoxA( NULL, Buffer, "KaynLdr", MB_OK );
+            HeapFree( GetProcessHeap(), 0, Buffer );
+            memset( Buffer, 0, strlen( HelloMsg ) );
+
+            ExitProcess( 0 );
         }
 
         case DLL_PROCESS_DETACH:

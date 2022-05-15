@@ -3,7 +3,7 @@ MAKEFLAGS += -s
 COMPILER_x86 		= i686-w64-mingw32-gcc
 COMPILER_x64 		= x86_64-w64-mingw32-gcc
 
-CFLAGS 				= -s -w -Wall -Wextra -masm=intel -shared -fPIC -e DllMain -Os -fno-asynchronous-unwind-tables -nostdlib
+CFLAGS 				= -s -w -Wall -Wextra -masm=intel -shared -fPIC -e DllMain -Os -fno-asynchronous-unwind-tables
 
 INCLUDE				= -I include
 SOURCE 				= $(wildcard src/*.c)

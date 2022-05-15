@@ -5,64 +5,91 @@
  */
 
 #include <Win32.h>
+#include <Macros.h>
+#include <KaynLdr.h>
 
-HMODULE KGetModuleByHash( DWORD hash )
+PVOID KGetModuleByHash( DWORD ModuleHash )
 {
-    PLDR_DATA_TABLE_ENTRY pModule       = (PLDR_DATA_TABLE_ENTRY)((PPEB) PPEB_PTR)->Ldr->InMemoryOrderModuleList.Flink;
-    PLDR_DATA_TABLE_ENTRY pFirstModule  = pModule;
-#ifdef DEBUG
-    printf("pModule: %x\n", pModule);
-#endif
-    do
+    PLDR_DATA_TABLE_ENTRY   LoaderEntry = NULL;
+    PLIST_ENTRY             ModuleList  = NULL;
+    PLIST_ENTRY             NextList    = NULL;
+
+    /* Get pointer to list */
+    ModuleList = & ( ( PPEB ) PPEB_PTR )->Ldr->InLoadOrderModuleList;
+    NextList   = ModuleList->Flink;
+
+    for ( ; ModuleList != NextList ; NextList = NextList->Flink )
     {
-        DWORD ModuleHash = KHashString( (WCHAR*)pModule->FullDllName.Buffer, pModule->FullDllName.Length );
+        LoaderEntry = NextList;
 
-        if (ModuleHash == hash)
-            return (HMODULE)pModule->Reserved2[0];
-        else
-            pModule = (PLDR_DATA_TABLE_ENTRY)pModule->Reserved1[0];
-
-    } while ( pModule && pModule != pFirstModule );
-
-    return INVALID_HANDLE_VALUE;
-}
-
-FARPROC KGetProcAddressByHash( HMODULE DllModuleBase, DWORD FunctionHash, DWORD Ordinal )
-{
-    PIMAGE_NT_HEADERS       ModuleNtHeader          = NULL;
-    PIMAGE_EXPORT_DIRECTORY ModuleExportedDirectory = NULL;
-    PDWORD                  AddressOfFunctions      = NULL;
-    PDWORD                  AddressOfNames          = NULL;
-    PWORD                   AddressOfNameOrdinals   = NULL;
-
-    ModuleNtHeader          = RVA_2_VA(PIMAGE_NT_HEADERS, DllModuleBase, ((PIMAGE_DOS_HEADER) DllModuleBase)->e_lfanew);
-    ModuleExportedDirectory = RVA_2_VA(PIMAGE_EXPORT_DIRECTORY, DllModuleBase, ModuleNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
-
-    AddressOfNames          = RVA_2_VA(PDWORD, DllModuleBase, ModuleExportedDirectory->AddressOfNames);
-    AddressOfFunctions      = RVA_2_VA(PDWORD, DllModuleBase, ModuleExportedDirectory->AddressOfFunctions);
-    AddressOfNameOrdinals   = RVA_2_VA(PWORD,  DllModuleBase, ModuleExportedDirectory->AddressOfNameOrdinals);
-
-    if ( (Ordinal != 0) && (((DWORD_PTR)Ordinal >> 16) == 0) )
-    {
-        WORD  ordinal = Ordinal & 0xFFFF;
-        if (ordinal < ModuleExportedDirectory->Base || ordinal >= ModuleExportedDirectory->Base + ModuleExportedDirectory->NumberOfFunctions)
-            return NULL;
-        return RVA_2_VA( FARPROC, DllModuleBase, AddressOfFunctions[AddressOfNameOrdinals[ordinal - ModuleExportedDirectory->Base]] );
-    }
-
-    for (DWORD i = 0; i < ModuleExportedDirectory->NumberOfNames; i++)
-    {
-        if ( KHashString( (PCHAR)DllModuleBase + AddressOfNames[i], KStringLengthA((PCHAR)DllModuleBase + AddressOfNames[i]) ) == FunctionHash )
-            return RVA_2_VA( FARPROC, DllModuleBase, AddressOfFunctions[AddressOfNameOrdinals[i]] );
+        if ( KHashString( LoaderEntry->BaseDllName.Buffer, LoaderEntry->BaseDllName.Length ) == ModuleHash )
+            return LoaderEntry->DllBase;
     }
 
     return NULL;
 }
 
-VOID KResolveIAT( LPVOID KaynImage, LPVOID IatDir )
+__forceinline UINT32 CopyDotStr( PCHAR String )
 {
-    API_DEFINE( LoadLibraryA , Win32_LoadLibraryA );
+    for ( UINT32 i = 0; i < KStringLengthA( String ); i++ )
+    {
+        if ( String[ i ] == '.' )
+            return i;
+    }
+}
 
+PVOID KGetProcAddressByHash( PINSTANCE Instance, PVOID DllModuleBase, DWORD FunctionHash, DWORD Ordinal )
+{
+    PIMAGE_NT_HEADERS       ModuleNtHeader          = NULL;
+    PIMAGE_EXPORT_DIRECTORY ModuleExportedDirectory = NULL;
+    SIZE_T                  ExportedDirectorySize   = 0;
+    PDWORD                  AddressOfFunctions      = NULL;
+    PDWORD                  AddressOfNames          = NULL;
+    PWORD                   AddressOfNameOrdinals   = NULL;
+    PVOID                   FunctionAddr            = NULL;
+    UINT32                  Index                   = 0;
+
+    ModuleNtHeader          = C_PTR( DllModuleBase + ( ( PIMAGE_DOS_HEADER ) DllModuleBase )->e_lfanew );
+    ModuleExportedDirectory = C_PTR( DllModuleBase + ModuleNtHeader->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_EXPORT ].VirtualAddress );
+    ExportedDirectorySize   = C_PTR( DllModuleBase + ModuleNtHeader->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_EXPORT ].Size );
+
+    AddressOfNames          = C_PTR( DllModuleBase + ModuleExportedDirectory->AddressOfNames );
+    AddressOfFunctions      = C_PTR( DllModuleBase + ModuleExportedDirectory->AddressOfFunctions );
+    AddressOfNameOrdinals   = C_PTR( DllModuleBase + ModuleExportedDirectory->AddressOfNameOrdinals );
+
+    for ( DWORD i = 0; i < ModuleExportedDirectory->NumberOfNames; i++ )
+    {
+        if ( KHashString( C_PTR( ( PCHAR ) DllModuleBase + AddressOfNames[ i ] ), 0 ) == FunctionHash )
+        {
+            FunctionAddr = C_PTR( DllModuleBase + AddressOfFunctions[ AddressOfNameOrdinals[ i ] ] );
+            if ( ( ULONG_PTR ) FunctionAddr >= ( ULONG_PTR ) ModuleExportedDirectory &&
+                 ( ULONG_PTR ) FunctionAddr <  ( ULONG_PTR ) ModuleExportedDirectory + ExportedDirectorySize )
+            {
+                CHAR    Library [ MAX_PATH ] = { 0 };
+                CHAR    Function[ MAX_PATH ] = { 0 };
+
+                // where is the dot
+                Index = CopyDotStr( FunctionAddr );
+
+                // Copy the library from our string
+                MemCopy( Library,  FunctionAddr, Index );
+
+                // Copy the function from our string
+                MemCopy( Function, C_PTR( FunctionAddr + Index + 1 ), KStringLengthA( C_PTR( FunctionAddr + Index + 1 ) ) );
+
+                DllModuleBase = KLoadLibrary( Instance, Library );
+                FunctionAddr  = KGetProcAddressByHash( Instance, DllModuleBase, KHashString( Function, 0 ), 0 );
+            }
+
+            return FunctionAddr;
+        }
+    }
+
+    return NULL;
+}
+
+VOID KResolveIAT( PINSTANCE Instance, LPVOID KaynImage, LPVOID IatDir )
+{
     PIMAGE_THUNK_DATA        OriginalTD        = NULL;
     PIMAGE_THUNK_DATA        FirstTD           = NULL;
 
@@ -72,29 +99,28 @@ VOID KResolveIAT( LPVOID KaynImage, LPVOID IatDir )
     PCHAR                    ImportModuleName  = NULL;
     HMODULE                  ImportModule      = NULL;
 
-    Win32_LoadLibraryA       = KGetProcAddressByHash( KGetModuleByHash( KERNEL32_HASH ), WIN32_LOADLIBRARYA, 0 );
-
     for ( pImportDescriptor = IatDir; pImportDescriptor->Name != 0; ++pImportDescriptor )
     {
-        ImportModuleName = RVA_2_VA( PCHAR, KaynImage, pImportDescriptor->Name );
-        ImportModule = Win32_LoadLibraryA( ImportModuleName );
+        ImportModuleName = C_PTR( KaynImage + pImportDescriptor->Name );
+        ImportModule     = KLoadLibrary( Instance, ImportModuleName );
 
-        OriginalTD  = RVA_2_VA( PIMAGE_THUNK_DATA, KaynImage, pImportDescriptor->OriginalFirstThunk );
-        FirstTD     = RVA_2_VA( PIMAGE_THUNK_DATA, KaynImage, pImportDescriptor->FirstThunk );
+        OriginalTD       = C_PTR( KaynImage + pImportDescriptor->OriginalFirstThunk );
+        FirstTD          = C_PTR( KaynImage + pImportDescriptor->FirstThunk );
 
         for ( ; OriginalTD->u1.AddressOfData != 0 ; ++OriginalTD, ++FirstTD )
         {
             if ( IMAGE_SNAP_BY_ORDINAL( OriginalTD->u1.Ordinal ) )
             {
-                LPVOID Function = KGetProcAddressByHash( ImportModule, NULL, IMAGE_ORDINAL(OriginalTD->u1.Ordinal) );
+                // TODO: get function by ordinal
+                PVOID Function = KGetProcAddressByHash( Instance, ImportModule, NULL, IMAGE_ORDINAL( OriginalTD->u1.Ordinal ) );
                 if ( Function != NULL )
                     FirstTD->u1.Function = Function;
             }
             else
             {
-                pImportByName       = RVA_2_VA( PIMAGE_IMPORT_BY_NAME, KaynImage, OriginalTD->u1.AddressOfData );
-                DWORD  FunctionHash = KHashString( pImportByName->Name, KStringLengthA(pImportByName->Name) );
-                LPVOID Function     = KGetProcAddressByHash( ImportModule, FunctionHash, 0 );
+                pImportByName       = C_PTR( KaynImage + OriginalTD->u1.AddressOfData );
+                DWORD  FunctionHash = KHashString( pImportByName->Name, KStringLengthA( pImportByName->Name ) );
+                LPVOID Function     = KGetProcAddressByHash( Instance, ImportModule, FunctionHash, 0 );
 
                 if ( Function != NULL )
                     FirstTD->u1.Function = Function;
@@ -103,36 +129,61 @@ VOID KResolveIAT( LPVOID KaynImage, LPVOID IatDir )
     }
 }
 
-VOID KReAllocSections( LPVOID KaynImage, ULONGLONG ImageBase, UINT_PTR BaseRelocDir )
+VOID KReAllocSections( PVOID KaynImage, PVOID ImageBase, PVOID BaseRelocDir )
 {
-    PIMAGE_BASE_RELOCATION  pImageBR = (LPVOID)BaseRelocDir;
+    PIMAGE_BASE_RELOCATION  pImageBR = C_PTR( BaseRelocDir );
     PIMAGE_RELOC            pImageR  = NULL;
+    LPVOID                  OffsetIB = C_PTR( U_PTR( KaynImage ) - U_PTR( ImageBase ) );
 
-    LPVOID                  OffsetIB = (LPVOID)((UINT_PTR)KaynImage - ImageBase);
-
-    /* Is a relocation! */
     while ( pImageBR->VirtualAddress != 0 )
     {
-        pImageR = (PIMAGE_RELOC) ( pImageBR + 1 );
+        pImageR = ( PIMAGE_RELOC ) ( pImageBR + 1 );
 
-        /* Exceed the size of the relocation? */
-        while ( pImageR != ( (UINT_PTR)pImageBR  + (UINT_PTR)pImageBR->SizeOfBlock )  )
+        while ( pImageR != ( U_PTR( pImageBR )  + U_PTR( pImageBR->SizeOfBlock ) )  )
         {
-            UINT_PTR Rel = (UINT_PTR)KaynImage + (UINT_PTR)pImageBR->VirtualAddress + (UINT_PTR)pImageR->offset;
+            UINT_PTR Rel = U_PTR( KaynImage ) + U_PTR( pImageBR->VirtualAddress ) + U_PTR( pImageR->offset );
+
             switch( pImageR->type )
             {
                 case IMAGE_REL_BASED_DIR64:
-                    *(PDWORD64)( Rel ) += (DWORD64)OffsetIB;
+                    *( PDWORD64 ) ( Rel ) += ( DWORD64 ) OffsetIB;
                     break;
 
                 case IMAGE_REL_BASED_HIGHLOW:
-                    *(PDWORD32)( Rel ) += (DWORD32)OffsetIB;
+                    *( PDWORD32 ) ( Rel ) += ( DWORD32 ) OffsetIB;
                     break;
             }
             ++pImageBR;
         };
-        pImageBR = (PIMAGE_BASE_RELOCATION)pImageR;
+        pImageBR = pImageR;
     }
+}
+
+PVOID KLoadLibrary( PINSTANCE Instance, LPSTR ModuleName )
+{
+    if ( ! ModuleName )
+        return NULL;
+
+    UNICODE_STRING  UnicodeString           = { 0 };
+    WCHAR           ModuleNameW[ MAX_PATH ] = { 0 };
+    DWORD           dwModuleNameSize        = KStringLengthA( ModuleName );
+    HMODULE         Module                  = NULL;
+
+    KCharStringToWCharString( ModuleNameW, ModuleName, dwModuleNameSize );
+
+    if ( ModuleNameW )
+    {
+        USHORT DestSize             = KStringLengthW( ModuleNameW ) * sizeof( WCHAR );
+        UnicodeString.Length        = DestSize;
+        UnicodeString.MaximumLength = DestSize + sizeof( WCHAR );
+    }
+
+    UnicodeString.Buffer = ModuleNameW;
+
+    if ( NT_SUCCESS( Instance->Win32.LdrLoadDll( NULL, 0, &UnicodeString, &Module ) ) )
+        return Module;
+    else
+        return NULL;
 }
 
 /*
@@ -141,7 +192,6 @@ VOID KReAllocSections( LPVOID KaynImage, ULONGLONG ImageBase, UINT_PTR BaseReloc
  ---------------------------------
 */
 
-// Inspired Hashing algo from TitanLdr by SecIdiot (https://github.com/SecIdiot/TitanLdr)
 DWORD KHashString( PVOID String, SIZE_T Length )
 {
     ULONG	Hash = HASH_KEY;
@@ -178,11 +228,24 @@ SIZE_T KStringLengthA( LPCSTR String )
     return (String2 - String);
 }
 
-VOID KMemSet(PVOID Destination, INT Value, SIZE_T Size)
+SIZE_T KStringLengthW(LPCWSTR String)
 {
-    PBYTE D = (PBYTE)Destination;
+    LPCWSTR String2;
 
-    while (Size--) *D++ = Value;
+    for (String2 = String; *String2; ++String2);
 
-    return;
+    return (String2 - String);
+}
+
+SIZE_T KCharStringToWCharString( PWCHAR Destination, PCHAR Source, SIZE_T MaximumAllowed )
+{
+    INT Length = MaximumAllowed;
+
+    while (--Length >= 0)
+    {
+        if (!(*Destination++ = *Source++))
+            return MaximumAllowed - Length - 1;
+    }
+
+    return MaximumAllowed - Length;
 }

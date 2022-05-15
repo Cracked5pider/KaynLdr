@@ -1,139 +1,107 @@
 /**
  * KaynLdr
  * Author: Paul Ungur (@C5pider)
- * Credits: Austin Hudson (@ilove2pwn_), Chetan Nayak (@NinjaParanoid), Bobby Cooke (@0xBoku), @trickster012
  */
 
-#include <Win32.h>
-#include <Syscall.h>
 #include <KaynLdr.h>
-
-typedef BOOL (WINAPI *KAYNDLLMAIN) ( HINSTANCE, DWORD, LPVOID );
+#include <Win32.h>
+#include <Macros.h>
 
 DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
 {
-    // Module Handles
+    INSTANCE                Instance        = { 0 };
     HMODULE                 KaynLibraryLdr  = NULL;
-    HMODULE                 hKernel32       = NULL;
-    HMODULE                 hNtDLL          = NULL;
-
-    // PE Headers
-    PIMAGE_DOS_HEADER       pImageDosHeader = NULL;
-    PIMAGE_NT_HEADERS       pImageNtHeaders = NULL;
-    PIMAGE_SECTION_HEADER   pSectionHeader  = NULL;
-    SIZE_T                  KaynImageDosSize= 0;
-
-    // Remote Library
+    PIMAGE_NT_HEADERS       NtHeaders       = NULL;
+    PIMAGE_SECTION_HEADER   SecHeader       = NULL;
     LPVOID                  KVirtualMemory  = NULL;
     DWORD                   KMemSize        = 0;
-    KAYNDLLMAIN             KaynDllMain     = NULL;
-
-    // Directory Data
-    PIMAGE_EXPORT_DIRECTORY pImageExportDir = NULL;
+    PVOID                   SecMemory       = NULL;
+    PVOID                   SecMemorySize   = 0;
+    PVOID                   RawDataPtr      = 0;
+    DWORD                   Protection      = 0;
+    ULONG                   OldProtection   = 0;
     LPVOID                  pImageDir       = NULL;
 
-    // Change memory protection
-    LPVOID      lpSectionTextAddr = NULL;
-    DWORD       dwSectionTextSize = 0;
-
-    // Needed Functions
-    API_DEFINE( LoadLibraryA, Win32_LoadLibraryA );
-    DWORD Sys_NtAllocateVirtualMemory = 0;
-    DWORD Sys_NtProtectVirtualMemory  = 0;
-
+    // 0. First we need to get our own image base
     KaynLibraryLdr = KaynCaller();
 
-    // -----------------------------------
-    // 1. Load needed function and syscalls
-    // -----------------------------------
+    // ------------------------
+    // 1. Load needed Functions
+    // ------------------------
+    Instance.Modules.Ntdll                 = KGetModuleByHash( NTDLL_HASH );
 
-    // Load needed libraries
-    hKernel32          = KGetModuleByHash(KERNEL32_HASH);
-    hNtDLL             = KGetModuleByHash(NTDLL_HASH);
-
-    Win32_LoadLibraryA = KGetProcAddressByHash( hKernel32, WIN32_LOADLIBRARYA, 0 );
-
-    pImageNtHeaders    = RVA_2_VA( PIMAGE_NT_HEADERS, hNtDLL, ((PIMAGE_DOS_HEADER)hNtDLL)->e_lfanew );
-    pImageExportDir    = RVA_2_VA( PIMAGE_EXPORT_DIRECTORY, hNtDLL, pImageNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress );
-
-    Sys_NtAllocateVirtualMemory = GetSyscall( hNtDLL, pImageExportDir, SYS_NTALLOCATEVIRTUALMEMORY );
-    Sys_NtProtectVirtualMemory  = GetSyscall( hNtDLL, pImageExportDir, SYS_NTPROTECTEDVIRTUALMEMORY );
+    Instance.Win32.LdrLoadDll              = KGetProcAddressByHash( &Instance, Instance.Modules.Ntdll, SYS_LDRLOADDLL, 0  );
+    Instance.Win32.NtAllocateVirtualMemory = KGetProcAddressByHash( &Instance, Instance.Modules.Ntdll, SYS_NTALLOCATEVIRTUALMEMORY, 0 );
+    Instance.Win32.NtProtectVirtualMemory  = KGetProcAddressByHash( &Instance, Instance.Modules.Ntdll, SYS_NTPROTECTEDVIRTUALMEMORY, 0 );
 
     // ---------------------------------------------------------------------------
     // 2. Allocate virtual memory and copy headers and section into the new memory
     // ---------------------------------------------------------------------------
+    NtHeaders = C_PTR( KaynLibraryLdr + ( ( PIMAGE_DOS_HEADER ) KaynLibraryLdr )->e_lfanew );
+    KMemSize  = NtHeaders->OptionalHeader.SizeOfImage;
 
-    pImageDosHeader = (PIMAGE_DOS_HEADER)KaynLibraryLdr;
-    pImageNtHeaders = RVA_2_VA( LPVOID, KaynLibraryLdr, pImageDosHeader->e_lfanew );
-    KMemSize        = pImageNtHeaders->OptionalHeader.SizeOfImage;
-
-    // KaynImageSize   = pImageNtHeaders->OptionalHeader.SizeOfImage;
-
-    // Prepare syscall and invoke NtAllocateVirtualMemory
-    SyscallPrepare( Sys_NtAllocateVirtualMemory );
-    if ( NT_SUCCESS( SyscallInvoke( NtGetCurrentProcess(), &KVirtualMemory, 0, &KMemSize, MEM_COMMIT, PAGE_READWRITE ) ) )
+    if ( NT_SUCCESS( Instance.Win32.NtAllocateVirtualMemory( NtCurrentProcess(), &KVirtualMemory, 0, &KMemSize, MEM_COMMIT, PAGE_READWRITE ) ) )
     {
         // ---- Copy Headers into new allocated memory ----
-        __movsb( (PBYTE)KVirtualMemory, (PBYTE)KaynLibraryLdr, pImageNtHeaders->OptionalHeader.SizeOfHeaders );
+        MemCopy( KVirtualMemory, KaynLibraryLdr, NtHeaders->OptionalHeader.SizeOfHeaders );
 
         // ---- Copy Sections into new allocated memory ----
-        pSectionHeader = IMAGE_FIRST_SECTION( pImageNtHeaders );
-        for (DWORD dwIdx = 0; dwIdx < pImageNtHeaders->FileHeader.NumberOfSections; dwIdx++)
+        SecHeader = IMAGE_FIRST_SECTION( NtHeaders );
+        for ( DWORD i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++ )
         {
-            PBYTE VirtualMemory     = (PBYTE)( (UINT_PTR)KVirtualMemory + (UINT_PTR)pSectionHeader[dwIdx].VirtualAddress );
-            PBYTE PointerToRawData  = (PBYTE)( (UINT_PTR)KaynLibraryLdr + (UINT_PTR)pSectionHeader[dwIdx].PointerToRawData );
+            SecMemory       = C_PTR( KVirtualMemory + SecHeader[ i ].VirtualAddress );
+            RawDataPtr      = C_PTR( KaynLibraryLdr + SecHeader[ i ].PointerToRawData );
+            SecMemorySize   = SecHeader[ i ].SizeOfRawData;
+            Protection      = 0;
+            OldProtection   = 0;
 
-            if ( dwIdx == 0 )
-            {
-                lpSectionTextAddr = VirtualMemory;
-                dwSectionTextSize = pSectionHeader[dwIdx].SizeOfRawData;
-            }
+            if ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_WRITE )
+                Protection = PAGE_WRITECOPY;
 
-            __movsb(
-                    VirtualMemory,
-                    PointerToRawData,
-                    pSectionHeader[dwIdx].SizeOfRawData
-            );
+            if ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_READ )
+                Protection = PAGE_READONLY;
 
+            if ( ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_WRITE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_READ ) )
+                Protection = PAGE_READWRITE;
+
+            if ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_EXECUTE )
+                Protection = PAGE_EXECUTE;
+
+            if ( ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_EXECUTE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_WRITE ) )
+                Protection = PAGE_EXECUTE_WRITECOPY;
+
+            if ( ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_EXECUTE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_READ ) )
+                Protection = PAGE_EXECUTE_READ;
+
+            if ( ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_EXECUTE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_WRITE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_READ ) )
+                Protection = PAGE_EXECUTE_READWRITE;
+
+            MemCopy( SecMemory, RawDataPtr, SecMemorySize );
+
+            Instance.Win32.NtProtectVirtualMemory( NtCurrentProcess(), &SecMemory, &SecMemorySize, Protection, &OldProtection );
         }
 
         // ----------------------------------
         // 3. Process our images import table
         // ----------------------------------
+        NtHeaders = C_PTR( KVirtualMemory + ( ( PIMAGE_DOS_HEADER ) KVirtualMemory )->e_lfanew );
+        pImageDir = C_PTR( KVirtualMemory + NtHeaders->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ].VirtualAddress );
 
-        pImageDosHeader = (PIMAGE_DOS_HEADER)KVirtualMemory;
-        pImageNtHeaders = RVA_2_VA( PIMAGE_NT_HEADERS, KVirtualMemory, pImageDosHeader->e_lfanew );
-
-        pImageDir       = RVA_2_VA( LPVOID, KVirtualMemory, pImageNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress );
-        KResolveIAT( KVirtualMemory, pImageDir );
+        KResolveIAT( &Instance, KVirtualMemory, pImageDir );
 
         // ----------------------------------------
         // 4. Process all of our images relocations
         // ----------------------------------------
-
         KReAllocSections(
                 KVirtualMemory,
-                pImageNtHeaders->OptionalHeader.ImageBase,
-                (UINT_PTR)KVirtualMemory + ((PIMAGE_DATA_DIRECTORY)pImageDir)->VirtualAddress
+                NtHeaders->OptionalHeader.ImageBase,
+                C_PTR( KVirtualMemory + ( ( PIMAGE_DATA_DIRECTORY ) pImageDir )->VirtualAddress )
         );
 
-        KaynDllMain =  (KAYNDLLMAIN)((UINT_PTR)KVirtualMemory + (UINT_PTR)pImageNtHeaders->OptionalHeader.AddressOfEntryPoint);
-
-        DWORD dwOldProtection = 0;
-
-        // change protection from RW to RX
-        SyscallPrepare( Sys_NtProtectVirtualMemory );
-        if ( NT_SUCCESS( SyscallInvoke( NtGetCurrentProcess(), &lpSectionTextAddr, &dwSectionTextSize, PAGE_EXECUTE_READ, &dwOldProtection ) ) ) 
-        {
-            // ---------------------------
-            // 5. Erase DOS and NT headers
-            // ---------------------------
-            KMemSet( KVirtualMemory, 0, sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) );
-
-            // --------------------------------
-            // 6. Finally executing our DllMain
-            // --------------------------------
-            KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, NULL );
-        }
+        // --------------------------------
+        // 5. Finally executing our DllMain
+        // --------------------------------
+        BOOL ( WINAPI *KaynDllMain ) ( PVOID, DWORD, PVOID ) = C_PTR( KVirtualMemory + NtHeaders->OptionalHeader.AddressOfEntryPoint );
+        KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, lpParameter );
     }
 }
