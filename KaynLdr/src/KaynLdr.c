@@ -17,10 +17,9 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
     DWORD                   KMemSize        = 0;
     PVOID                   SecMemory       = NULL;
     PVOID                   SecMemorySize   = 0;
-    PVOID                   RawDataPtr      = 0;
     DWORD                   Protection      = 0;
     ULONG                   OldProtection   = 0;
-    LPVOID                  pImageDir       = NULL;
+    PIMAGE_DATA_DIRECTORY   ImageDir       = NULL;
 
     // 0. First we need to get our own image base
     KaynLibraryLdr = KaynCaller();
@@ -42,15 +41,37 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
 
     if ( NT_SUCCESS( Instance.Win32.NtAllocateVirtualMemory( NtCurrentProcess(), &KVirtualMemory, 0, &KMemSize, MEM_COMMIT, PAGE_READWRITE ) ) )
     {
-        // ---- Copy Headers into new allocated memory ----
-        MemCopy( KVirtualMemory, KaynLibraryLdr, NtHeaders->OptionalHeader.SizeOfHeaders );
-
         // ---- Copy Sections into new allocated memory ----
         SecHeader = IMAGE_FIRST_SECTION( NtHeaders );
         for ( DWORD i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++ )
         {
+            MemCopy(
+                C_PTR( KVirtualMemory + SecHeader[ i ].VirtualAddress ),    // Section New Memory
+                C_PTR( KaynLibraryLdr + SecHeader[ i ].PointerToRawData ),  // Section Raw Data
+                SecHeader[ i ].SizeOfRawData                                // Section Size
+            );
+        }
+
+        // ----------------------------------
+        // 3. Process our images import table
+        // ----------------------------------
+        ImageDir = & NtHeaders->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ];
+        if ( ImageDir->VirtualAddress )
+            KResolveIAT( &Instance, KVirtualMemory, C_PTR( KVirtualMemory + ImageDir->VirtualAddress ) );
+
+        // ----------------------------
+        // 4. Process image relocations
+        // ----------------------------
+        ImageDir = & NtHeaders->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ];
+        if ( ImageDir->VirtualAddress )
+            KReAllocSections( KVirtualMemory, NtHeaders->OptionalHeader.ImageBase, C_PTR( KVirtualMemory + ImageDir->VirtualAddress ) );
+
+        // ----------------------------------
+        // 5. Set protection for each section
+        // ----------------------------------
+        for ( DWORD i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++ )
+        {
             SecMemory       = C_PTR( KVirtualMemory + SecHeader[ i ].VirtualAddress );
-            RawDataPtr      = C_PTR( KaynLibraryLdr + SecHeader[ i ].PointerToRawData );
             SecMemorySize   = SecHeader[ i ].SizeOfRawData;
             Protection      = 0;
             OldProtection   = 0;
@@ -76,30 +97,11 @@ DLLEXPORT VOID KaynLoader( LPVOID lpParameter )
             if ( ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_EXECUTE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_WRITE ) && ( SecHeader[ i ].Characteristics & IMAGE_SCN_MEM_READ ) )
                 Protection = PAGE_EXECUTE_READWRITE;
 
-            MemCopy( SecMemory, RawDataPtr, SecMemorySize );
-
             Instance.Win32.NtProtectVirtualMemory( NtCurrentProcess(), &SecMemory, &SecMemorySize, Protection, &OldProtection );
         }
 
-        // ----------------------------------
-        // 3. Process our images import table
-        // ----------------------------------
-        NtHeaders = C_PTR( KVirtualMemory + ( ( PIMAGE_DOS_HEADER ) KVirtualMemory )->e_lfanew );
-        pImageDir = C_PTR( KVirtualMemory + NtHeaders->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ].VirtualAddress );
-
-        KResolveIAT( &Instance, KVirtualMemory, pImageDir );
-
-        // ----------------------------------------
-        // 4. Process all of our images relocations
-        // ----------------------------------------
-        KReAllocSections(
-                KVirtualMemory,
-                NtHeaders->OptionalHeader.ImageBase,
-                C_PTR( KVirtualMemory + ( ( PIMAGE_DATA_DIRECTORY ) pImageDir )->VirtualAddress )
-        );
-
         // --------------------------------
-        // 5. Finally executing our DllMain
+        // 6. Finally executing our DllMain
         // --------------------------------
         BOOL ( WINAPI *KaynDllMain ) ( PVOID, DWORD, PVOID ) = C_PTR( KVirtualMemory + NtHeaders->OptionalHeader.AddressOfEntryPoint );
         KaynDllMain( KVirtualMemory, DLL_PROCESS_ATTACH, lpParameter );

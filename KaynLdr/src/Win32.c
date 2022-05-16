@@ -8,6 +8,13 @@
 #include <Macros.h>
 #include <KaynLdr.h>
 
+
+#ifdef _WIN64
+#define IMAGE_REL_TYPE IMAGE_REL_BASED_DIR64
+#else
+#define IMAGE_REL_TYPE IMAGE_REL_BASED_HIGHLOW
+#endif
+
 PVOID KGetModuleByHash( DWORD ModuleHash )
 {
     PLDR_DATA_TABLE_ENTRY   LoaderEntry = NULL;
@@ -132,30 +139,25 @@ VOID KResolveIAT( PINSTANCE Instance, LPVOID KaynImage, LPVOID IatDir )
 VOID KReAllocSections( PVOID KaynImage, PVOID ImageBase, PVOID BaseRelocDir )
 {
     PIMAGE_BASE_RELOCATION  pImageBR = C_PTR( BaseRelocDir );
-    PIMAGE_RELOC            pImageR  = NULL;
     LPVOID                  OffsetIB = C_PTR( U_PTR( KaynImage ) - U_PTR( ImageBase ) );
+    PIMAGE_RELOC            Reloc    = NULL;
 
-    while ( pImageBR->VirtualAddress != 0 )
+    while( pImageBR->VirtualAddress != 0 )
     {
-        pImageR = ( PIMAGE_RELOC ) ( pImageBR + 1 );
+        Reloc = ( PIMAGE_RELOC ) ( pImageBR + 1 );
 
-        while ( pImageR != ( U_PTR( pImageBR )  + U_PTR( pImageBR->SizeOfBlock ) )  )
+        while ( ( PBYTE ) Reloc != ( PBYTE ) pImageBR + pImageBR->SizeOfBlock )
         {
-            UINT_PTR Rel = U_PTR( KaynImage ) + U_PTR( pImageBR->VirtualAddress ) + U_PTR( pImageR->offset );
+            if ( Reloc->type == IMAGE_REL_TYPE )
+                *( ULONG_PTR* ) ( U_PTR( KaynImage ) + pImageBR->VirtualAddress + Reloc->offset ) += ( ULONG_PTR ) OffsetIB;
 
-            switch( pImageR->type )
-            {
-                case IMAGE_REL_BASED_DIR64:
-                    *( PDWORD64 ) ( Rel ) += ( DWORD64 ) OffsetIB;
-                    break;
+            else if ( Reloc->type != IMAGE_REL_BASED_ABSOLUTE )
+                __debugbreak(); // TODO: handle this error
 
-                case IMAGE_REL_BASED_HIGHLOW:
-                    *( PDWORD32 ) ( Rel ) += ( DWORD32 ) OffsetIB;
-                    break;
-            }
-            ++pImageBR;
-        };
-        pImageBR = pImageR;
+            Reloc++;
+        }
+
+        pImageBR = ( PIMAGE_BASE_RELOCATION ) Reloc;
     }
 }
 
